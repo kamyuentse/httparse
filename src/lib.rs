@@ -1,6 +1,8 @@
 #![cfg_attr(not(feature = "std"),  no_std)]
 #![cfg_attr(test, deny(warnings))]
 #![deny(missing_docs)]
+#![cfg_attr(feature = "simd", feature(cfg_target_feature, platform_intrinsics))]
+
 //! # httparse
 //!
 //! A push library for parsing HTTP/1.x requests and responses.
@@ -17,6 +19,8 @@
 #[cfg(feature = "std")] extern crate std as core;
 
 use core::{fmt, result, str, slice};
+
+#[cfg(feature = "simd")] extern crate simd;
 
 use iter::Bytes;
 
@@ -47,6 +51,14 @@ macro_rules! complete {
             Status::Partial => return Ok(Status::Partial)
         }
     }
+}
+
+macro_rules! if_simd {
+    ($e:block) => ({
+        if cfg!(all(feature = "simd", target_feature = "sse4.2")) {
+            $e
+        }
+    })
 }
 
 #[inline]
@@ -434,6 +446,18 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 
 #[inline]
 fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
+    if_simd!({
+        if let Some(b) = bytes.find(&[0, 0o40, 255, 255]) {
+            if b == b' ' {
+                return Ok(Status::Complete(unsafe {
+                    // all bytes up till `i` must have been `is_token`.
+                    str::from_utf8_unchecked(bytes.slice_skip(1))
+                }));
+            } else if !is_token(b) {
+                return Err(Error::Token);
+            }
+        }
+    });
     loop {
         let b = next!(bytes);
         if b == b' ' {
@@ -514,14 +538,30 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
 
             num_headers += 1;
             // parse header name until colon
-            loop {
+            let mut colon = false;
+            if_simd!({
+                let ranges = &[
+                    0, b'"',
+                    b'(', b')',
+                    b',', b',',
+                    b'/', b'/',
+                    b':', b'@',
+                    b'[', b']',
+                    b'{', 255,
+                ];
+                if let Some(_found) = bytes.find(ranges) {
+                    colon = true;
+                }
+            });
+
+            while !colon {
                 let b = next!(bytes);
                 if b == b':' {
                     count += bytes.pos();
                     header.name = unsafe {
                         str::from_utf8_unchecked(bytes.slice_skip(1))
                     };
-                    break;
+                    colon = true;
                 } else if !is_token(b) {
                     return Err(Error::HeaderName);
                 }
@@ -549,8 +589,10 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                 }
 
                 // parse value till EOL
-
-
+                if let Some(found) = bytes.find(&[0, 0o10, 0o12, 0o13, 0o177, 0o177]) {
+                    b = found;
+                    break 'value;
+                }
 
                 macro_rules! check {
                     ($bytes:ident, $i:ident) => ({
