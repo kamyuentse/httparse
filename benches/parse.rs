@@ -1,9 +1,9 @@
-#![feature(test)]
-
 extern crate pico_sys as pico;
 extern crate httparse;
 
-extern crate test;
+#[macro_use]
+extern crate criterion;
+use criterion::Criterion;
 
 const REQ_SHORT: &'static [u8] = b"\
 GET / HTTP/1.0\r\n\
@@ -23,8 +23,7 @@ Connection: keep-alive\r\n\
 Cookie: wp_ozh_wsa_visits=2; wp_ozh_wsa_visit_lasttime=xxxxxxxxxx; __utma=xxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.x; __utmz=xxxxxxxxx.xxxxxxxxxx.x.x.utmccn=(referral)|utmcsr=reader.livedoor.com|utmcct=/reader/|utmcmd=referral\r\n\r\n";
 
 
-#[bench]
-fn bench_pico(b: &mut test::Bencher) {
+fn bench_pico(c: &mut Criterion) {
     use std::mem;
 
     #[repr(C)]
@@ -34,46 +33,48 @@ fn bench_pico(b: &mut test::Bencher) {
 
     #[repr(C)]
     struct Headers<'a>(&'a mut [Header<'a>]);
-    let method = [0i8; 16];
-    let path = [0i8; 16];
-    let mut minor_version = 0;
-    let mut h = [Header(&[], &[]); 16];
-    let mut h_len = h.len();
-    let headers = Headers(&mut h);
-    let prev_buf_len = 0;
 
-    b.iter(|| {
-        let ret = unsafe {
-            pico::ffi::phr_parse_request(
-                REQ.as_ptr() as *const _,
-                REQ.len(),
-                &mut method.as_ptr(),
-                &mut 16,
-                &mut path.as_ptr(),
-                &mut 16,
-                &mut minor_version,
-                mem::transmute::<*mut Header, *mut pico::ffi::phr_header>(headers.0.as_mut_ptr()),
-                &mut h_len as *mut usize as *mut _,
-                prev_buf_len
-            )
-        };
-        assert_eq!(ret, REQ.len() as i32);
+    c.bench_function("PicoHTTParser - medium", |b| {
+        b.iter(|| {
+            let method = [0i8; 16];
+            let path = [0i8; 16];
+            let mut minor_version = 0;
+            let mut h = [Header(&[], &[]); 16];
+            let mut h_len = h.len();
+            let headers = Headers(&mut h);
+            let prev_buf_len = 0;
+
+            let ret = unsafe {
+                pico::ffi::phr_parse_request(
+                    REQ.as_ptr() as *const _,
+                    REQ.len(),
+                    &mut method.as_ptr(),
+                    &mut 16,
+                    &mut path.as_ptr(),
+                    &mut 16,
+                    &mut minor_version,
+                    mem::transmute::<*mut Header, *mut pico::ffi::phr_header>(headers.0.as_mut_ptr()),
+                    &mut h_len as *mut usize as *mut _,
+                    prev_buf_len
+                )
+            };
+            assert_eq!(ret, REQ.len() as i32);
+        })
     });
-    b.bytes = REQ.len() as u64;
 }
 
-#[bench]
-fn bench_httparse(b: &mut test::Bencher) {
-    let mut headers = [httparse::Header{ name: "", value: &[] }; 16];
-    let mut req = httparse::Request::new(&mut headers);
-    b.iter(|| {
-        assert_eq!(req.parse(REQ).unwrap(), httparse::Status::Complete(REQ.len()));
+fn bench_httparse(c: &mut Criterion) {
+    println!(" len: {}", REQ.len());
+    c.bench_function("Httparse - medium", |b| {
+        b.iter(|| {
+            let mut headers = [httparse::Header{ name: "", value: &[] }; 16];
+            let mut req = httparse::Request::new(&mut headers);
+            assert_eq!(req.parse(REQ).unwrap(), httparse::Status::Complete(REQ.len()));
+        })
     });
-    b.bytes = REQ.len() as u64;
 }
 
-#[bench]
-fn bench_pico_short(b: &mut test::Bencher) {
+fn bench_pico_short(c: &mut Criterion) {
     use std::mem;
 
     #[repr(C)]
@@ -83,40 +84,48 @@ fn bench_pico_short(b: &mut test::Bencher) {
 
     #[repr(C)]
     struct Headers<'a>(&'a mut [Header<'a>]);
-    let method = [0i8; 16];
-    let path = [0i8; 16];
-    let mut minor_version = 0;
-    let mut h = [Header(&[], &[]); 16];
-    let mut h_len = h.len();
-    let headers = Headers(&mut h);
-    let prev_buf_len = 0;
 
-    b.iter(|| {
-        let ret = unsafe {
-            pico::ffi::phr_parse_request(
-                REQ_SHORT.as_ptr() as *const _,
-                REQ_SHORT.len(),
-                &mut method.as_ptr(),
-                &mut 16,
-                &mut path.as_ptr(),
-                &mut 16,
-                &mut minor_version,
-                mem::transmute::<*mut Header, *mut pico::ffi::phr_header>(headers.0.as_mut_ptr()),
-                &mut h_len as *mut usize as *mut _,
-                prev_buf_len
-            )
-        };
-        assert_eq!(ret, REQ_SHORT.len() as i32);
+    c.bench_function("PicoHTTParser - short", |b| {
+        b.iter(|| {
+            let method = [0i8; 16];
+            let path = [0i8; 16];
+            let mut minor_version = 0;
+            let mut h = [Header(&[], &[]); 16];
+            let mut h_len = h.len();
+            let headers = Headers(&mut h);
+            let prev_buf_len = 0;
+
+            let ret = unsafe {
+                pico::ffi::phr_parse_request(
+                    REQ_SHORT.as_ptr() as *const _,
+                    REQ_SHORT.len(),
+                    &mut method.as_ptr(),
+                    &mut 16,
+                    &mut path.as_ptr(),
+                    &mut 16,
+                    &mut minor_version,
+                    mem::transmute::<*mut Header, *mut pico::ffi::phr_header>(headers.0.as_mut_ptr()),
+                    &mut h_len as *mut usize as *mut _,
+                    prev_buf_len
+                )
+            };
+            assert_eq!(ret, REQ_SHORT.len() as i32);
+        })
     });
-    b.bytes = REQ_SHORT.len() as u64;
 }
 
-#[bench]
-fn bench_httparse_short(b: &mut test::Bencher) {
-    let mut headers = [httparse::Header{ name: "", value: &[] }; 16];
-    let mut req = httparse::Request::new(&mut headers);
-    b.iter(|| {
-        assert_eq!(req.parse(REQ_SHORT).unwrap(), httparse::Status::Complete(REQ_SHORT.len()));
+fn bench_httparse_short(c: &mut Criterion) {
+    println!("short len: {}", REQ_SHORT.len());
+    c.bench_function("Httparse - short", |b| {
+        b.iter(|| {
+            let mut headers = [httparse::Header{ name: "", value: &[] }; 16];
+            let mut req = httparse::Request::new(&mut headers);
+
+            assert_eq!(req.parse(REQ_SHORT).unwrap(), httparse::Status::Complete(REQ_SHORT.len()));
+        })
     });
-    b.bytes = REQ_SHORT.len() as u64;
 }
+
+criterion_group!(benche_medium, bench_httparse, bench_pico);
+criterion_group!(benche_short, bench_httparse_short, bench_pico_short);
+criterion_main!(benche_short, benche_medium);

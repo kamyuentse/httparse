@@ -15,8 +15,13 @@ default = ["std"]
 std = []
 nightly = []
 
+[[bench]]
+name = "parse"
+harness = false
+
 [dev-dependencies]
 pico-sys = "0.0"
+criterion = "0.2"
 
 [profile.bench]
 lto = true
