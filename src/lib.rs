@@ -1,5 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-#![cfg_attr(test, deny(warnings))]
+// #![cfg_attr(test, deny(warnings))]
 #![cfg_attr(feature = "nightly", feature(cfg_target_feature, stdsimd))]
 #![deny(missing_docs)]
 //! # httparse
@@ -17,10 +17,22 @@ extern crate std as core;
 
 use core::{fmt, result, str, slice};
 
-use iter::Bytes;
+mod bytes;
+#[macro_use]
+mod macros;
 
-mod iter;
-#[macro_use] mod macros;
+use bytes::Bytes;
+
+if_nightly! {
+    mod str_simd;
+    use str_simd::*;
+
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::*;
+
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::*;
+}
 
 #[inline]
 fn shrink<T>(slice: &mut &mut [T], len: usize) {
@@ -29,95 +41,118 @@ fn shrink<T>(slice: &mut &mut [T], len: usize) {
     *slice = unsafe { slice::from_raw_parts_mut(ptr, len) };
 }
 
-/// Determines if byte is a token char.
+/// ASCII table bitmaps for HTTP token.
 ///
-/// > ```notrust
-/// > token          = 1*tchar
-/// >
-/// > tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
-/// >                / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
-/// >                / DIGIT / ALPHA
-/// >                ; any VCHAR, except delimiters
-/// > ```
-#[inline]
-fn is_token(b: u8) -> bool {
-    b > 0x1F && b < 0x7F
-}
-
-// ASCII codes to accept URI string.
-// i.e. A-Z a-z 0-9 !#$%&'*+-._();:@=,/?[]~
-// TODO: Make a stricter checking for URI string?
-static URI_MAP: [bool; 256] = byte_map![
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1,
-    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0,
-    // ====== Extended ASCII (aka. obs-text) ======
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+/// ## Accepted Set
+///
+/// ```notrust
+/// ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~
+/// ```
+///
+/// 1. %x21
+/// 2. %x23 - %x27
+/// 3. %x2A - %x2B
+/// 4. %x2D - %x2E
+/// 5. %x30 - %x39
+/// 6. %x41 - %x5A
+/// 7. %x5E - %x7A
+/// 8. %x7C
+/// 9. %x7E
+///
+/// Reference: [RFC7230 Section-3.2.6](https://tools.ietf.org/html/rfc7230#section-3.2.6)
+static TOKEN_MAP: [bool; 256] = byte_map![
+//  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 1
+    0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0, // 2
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, // 3
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 4
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, // 5
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 6
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, // 7
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 8
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 9
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // A
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // B
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // C
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // D
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // E
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // F
 ];
 
 #[inline]
-fn is_uri_token(b: u8) -> bool {
+fn is_token_char(b: u8) -> bool {
+    TOKEN_MAP[b as usize]
+}
+
+/// ASCII table bitmaps for URI string.
+///
+/// ## Accepted Set
+///
+/// ```notrust
+/// ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-._();:@=,/?[]~
+/// ```
+///
+/// 1. %x21
+/// 2. %x23 - %x3B
+/// 3. %x3D
+/// 4. %x3F - %x5B
+/// 5. %x5D
+/// 6. %x5F
+/// 7. %x61 - %x7A
+/// 8. %x7E
+///
+// TODO: Make a stricter checking for URI string?
+static URI_MAP: [bool; 256] = byte_map![
+//  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 1
+    0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 2
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, // 3
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 4
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, // 5
+    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 6
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, // 7
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 8
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 9
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // A
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // B
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // C
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // D
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // E
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // F
+];
+
+#[inline]
+fn is_uri_char(b: u8) -> bool {
     URI_MAP[b as usize]
 }
 
-static HEADER_NAME_MAP: [bool; 256] = byte_map![
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 1, 0,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
-    0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-];
-
-#[inline]
-fn is_header_name_token(b: u8) -> bool {
-    HEADER_NAME_MAP[b as usize]
-}
-
+/// ASCII table bitmaps for header value.
+///
+/// Reference: [RFC7230 Section-3.2](https://tools.ietf.org/html/rfc7230#section-3.2)
 static HEADER_VALUE_MAP: [bool; 256] = byte_map![
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+//  0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, // 0
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 1
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 2
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 3
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 4
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 5
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 6
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, // 7
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 8
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 9
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // A
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // B
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // C
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // D
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // E
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // F
 ];
 
-
 #[inline]
-fn is_header_value_token(b: u8) -> bool {
+fn is_header_value_char(b: u8) -> bool {
     HEADER_VALUE_MAP[b as usize]
 }
 
@@ -479,6 +514,65 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 
 #[inline]
 fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
+//     #[cfg(feature = "nightly")]
+//     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+//     {
+//         #[allow(non_snake_case, overflowing_literals)]
+//         let TOKEN = unsafe { _mm256_setr_epi8(
+//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
+//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
+//         ) };
+//
+//         while bytes.as_ref().len() >= 64 {
+//             let nspn = _strspn_ascii_64_avx(bytes.as_ref(), TOKEN);
+//             bytes.advance(nspn);
+//
+//             if nspn != 64 {
+//                 break;
+//             }
+//         }
+//
+//         while bytes.as_ref().len() >= 32 {
+//             let nspn = _strspn_ascii_32_avx(bytes.as_ref(), TOKEN);
+//             bytes.advance(nspn);
+//
+//             if nspn != 32 {
+//                 break;
+//             }
+//         }
+//     }
+//
+//     #[cfg(feature = "nightly")]
+//     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+//     {
+//         #[allow(non_snake_case, overflowing_literals)]
+//         let TOKEN = unsafe { _mm_setr_epi8(
+//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
+//         ) };
+//
+//         while bytes.as_ref().len() >= 64 {
+//             let nspn = _strspn_ascii_64_sse(bytes.as_ref(), TOKEN);
+//             bytes.advance(nspn);
+//
+//             if nspn != 64 {
+//                 break;
+//             }
+//         }
+//
+//         while bytes.as_ref().len() >= 32 {
+//             let nspn = _strspn_ascii_32_sse(bytes.as_ref(), TOKEN);
+//             bytes.advance(nspn);
+//
+//             if nspn != 32 {
+//                 break;
+//             }
+//         }
+//     }
+
+    // fallback implementation
     loop {
         let b = next!(bytes);
         if b == b' ' {
@@ -486,33 +580,70 @@ fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 // all bytes up till `i` must have been `is_token`.
                 str::from_utf8_unchecked(bytes.slice_skip(1))
             }));
-        } else if !is_token(b) {
+        } else if !is_token_char(b) {
             return Err(Error::Token);
         }
     }
 }
+
 
 #[inline]
 fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
     #[cfg(feature = "nightly")]
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-    while bytes.as_ref().len() >= 32 {
-        let advance = match_url_char_32_avx(bytes.as_ref());
-        bytes.advance(advance);
+    {
+        #[allow(non_snake_case, overflowing_literals)]
+        let URI = unsafe { _mm256_setr_epi8(
+            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c,
+            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c,
+        ) };
 
-        if advance != 32 {
-            break;
+        while bytes.as_ref().len() >= 64 {
+            let nspn = _strspn_ascii_64_avx(bytes.as_ref(), URI);
+            bytes.advance(nspn);
+
+            if nspn != 64 {
+                break;
+            }
+        }
+
+        while bytes.as_ref().len() >= 32 {
+            let nspn = _strspn_ascii_32_avx(bytes.as_ref(), URI);
+            bytes.advance(nspn);
+
+            if nspn != 32 {
+                break;
+            }
         }
     }
 
     #[cfg(feature = "nightly")]
     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
-    while bytes.as_ref().len() >= 16 {
-        let advance = match_url_char_16_sse(bytes.as_ref());
-        bytes.advance(advance);
+    {
+        #[allow(non_snake_case, overflowing_literals)]
+        let URI = unsafe { _mm_setr_epi8(
+            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
+            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c
+        ) };
 
-        if advance != 16 {
-            break;
+        while bytes.as_ref().len() >= 64 {
+            let nspn = _strspn_ascii_64_sse(bytes.as_ref(), URI);
+            bytes.advance(nspn);
+
+            if nspn != 64 {
+                break;
+            }
+        }
+
+        while bytes.as_ref().len() >= 32 {
+            let nspn = _strspn_ascii_32_sse(bytes.as_ref(), URI);
+            bytes.advance(nspn);
+
+            if nspn != 32 {
+                break;
+            }
         }
     }
 
@@ -523,87 +654,9 @@ fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 // all bytes up till `i` must have been `is_token`.
                 str::from_utf8_unchecked(bytes.slice_skip(1))
             }));
-        } else if !is_uri_token(b) {
+        } else if !is_uri_char(b) {
             return Err(Error::Token);
         }
-    }
-}
-
-#[cfg(feature = "nightly")]
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-#[inline]
-fn match_url_char_32_avx(buf: &[u8]) -> usize {
-    debug_assert!(buf.len() >= 32);
-
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-
-    let ptr = buf.as_ptr();
-
-    #[allow(non_snake_case, overflowing_literals)]
-        unsafe {
-        let LSH: __m256i = _mm256_set1_epi8(0x0f);
-        let URI: __m256i = _mm256_setr_epi8(
-            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c,
-            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c,
-        );
-        let ARF: __m256i = _mm256_setr_epi8(
-            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        );
-
-        let data = _mm256_lddqu_si256(ptr as *const _);
-        let rbms = _mm256_shuffle_epi8(URI, data);
-        let cols = _mm256_and_si256(LSH, _mm256_srli_epi16(data, 4));
-        let bits = _mm256_and_si256(_mm256_shuffle_epi8(ARF, cols), rbms);
-
-        let v = _mm256_cmpeq_epi8(bits, _mm256_setzero_si256());
-        let r = 0xffffffff_00000000 | _mm256_movemask_epi8(v) as u64;
-
-        _tzcnt_u64(r) as usize
-    }
-}
-
-#[cfg(feature = "nightly")]
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
-#[inline]
-fn match_url_char_16_sse(buf: &[u8]) -> usize {
-    debug_assert!(buf.len() >= 16);
-
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-
-    let ptr = buf.as_ptr();
-
-    #[allow(non_snake_case, overflowing_literals)]
-    unsafe {
-        let LSH: __m128i = _mm_set1_epi8(0x0f);
-        let URI: __m128i = _mm_setr_epi8(
-            0xb8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-            0xfc, 0xfc, 0xfc, 0x7c, 0x54, 0x7c, 0xd4, 0x7c,
-        );
-        let ARF: __m128i = _mm_setr_epi8(
-            0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        );
-
-        let data = _mm_lddqu_si128(ptr as *const _);
-        let rbms = _mm_shuffle_epi8(URI, data);
-        let cols = _mm_and_si128(LSH, _mm_srli_epi16(data, 4));
-        let bits = _mm_and_si128(_mm_shuffle_epi8(ARF, cols), rbms);
-
-        let v = _mm_cmpeq_epi8(bits, _mm_setzero_si128());
-        let r = 0xffff_0000 | _mm_movemask_epi8(v) as u32;
-
-        _tzcnt_u32(r) as usize
     }
 }
 
@@ -727,7 +780,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
             } else if b == b'\n' {
                 result = Ok(Status::Complete(count + bytes.pos()));
                 break;
-            } else if !is_header_name_token(b) {
+            } else if !is_token_char(b) {
                 return Err(Error::HeaderName);
             }
 
@@ -746,7 +799,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                         str::from_utf8_unchecked(bytes.slice_skip(1))
                     };
                     break 'name;
-                } else if !is_header_name_token(b) {
+                } else if !is_token_char(b) {
                     return Err(Error::HeaderName);
                 }
             }
@@ -763,7 +816,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                         bytes.slice();
                         continue 'whitespace;
                     } else {
-                        if !is_header_value_token(b) {
+                        if !is_header_value_char(b) {
                             break 'value;
                         }
                         break 'whitespace;
@@ -800,7 +853,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                 macro_rules! check {
                     ($bytes:ident, $i:ident) => ({
                         b = $bytes.$i();
-                        if !is_header_value_token(b) {
+                        if !is_header_value_char(b) {
                             break 'value;
                         }
                     });
@@ -820,7 +873,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                 }
                 loop {
                     b = next!(bytes);
-                    if !is_header_value_token(b) {
+                    if !is_header_value_char(b) {
                         break 'value;
                     }
                 }

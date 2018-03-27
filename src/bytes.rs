@@ -33,7 +33,7 @@ impl<'a> Bytes<'a> {
     #[allow(unused)]
     #[inline]
     pub fn advance(&mut self, n: usize) {
-        debug_assert!(self.pos + n <= self.slice.len(), "overflow");
+        debug_assert!(self.pos + n <= self.slice.len());
         self.pos += n;
     }
 

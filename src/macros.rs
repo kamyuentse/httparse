@@ -1,5 +1,12 @@
 ///! Utility macros
 
+macro_rules! if_nightly {
+    ($($i:item)*) => ($(
+        #[cfg(feature = "nightly")]
+        $i
+    )*)
+}
+
 macro_rules! next {
     ($bytes:ident) => ({
         match $bytes.next() {
