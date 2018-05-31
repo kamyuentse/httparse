@@ -22,18 +22,18 @@ Keep-Alive: 115\r\n\
 Connection: keep-alive\r\n\
 Cookie: wp_ozh_wsa_visits=2; wp_ozh_wsa_visit_lasttime=xxxxxxxxxx; __utma=xxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.x; __utmz=xxxxxxxxx.xxxxxxxxxx.x.x.utmccn=(referral)|utmcsr=reader.livedoor.com|utmcct=/reader/|utmcmd=referral\r\n\r\n";
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Header<'a>(&'a [u8], &'a [u8]);
+
+
+#[repr(C)]
+struct Headers<'a>(&'a mut [Header<'a>]);
 
 #[bench]
 fn bench_pico(b: &mut test::Bencher) {
     use std::mem;
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Header<'a>(&'a [u8], &'a [u8]);
-
-
-    #[repr(C)]
-    struct Headers<'a>(&'a mut [Header<'a>]);
     let method = [0i8; 16];
     let path = [0i8; 16];
     let mut minor_version = 0;
@@ -76,13 +76,6 @@ fn bench_httparse(b: &mut test::Bencher) {
 fn bench_pico_short(b: &mut test::Bencher) {
     use std::mem;
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Header<'a>(&'a [u8], &'a [u8]);
-
-
-    #[repr(C)]
-    struct Headers<'a>(&'a mut [Header<'a>]);
     let method = [0i8; 16];
     let path = [0i8; 16];
     let mut minor_version = 0;

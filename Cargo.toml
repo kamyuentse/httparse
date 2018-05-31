@@ -20,5 +20,6 @@ pico-sys = "0.0"
 
 [profile.bench]
 lto = true
-codegen-units = 1
+debug = true
 opt-level = 3
+codegen-units = 1

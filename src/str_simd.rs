@@ -4,7 +4,7 @@ use core::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(target_feature = "avx2")]
 #[inline]
 pub fn _strspn_ascii_32_avx(buf: &[u8], arbm: __m256i) -> usize {
     debug_assert!(buf.len() >= 32);
@@ -33,7 +33,7 @@ pub fn _strspn_ascii_32_avx(buf: &[u8], arbm: __m256i) -> usize {
     }
 }
 
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(target_feature = "avx2")]
 #[inline]
 pub fn _strspn_ascii_64_avx(buf: &[u8], arbm: __m256i) -> usize {
     debug_assert!(buf.len() >= 64);
@@ -72,7 +72,7 @@ pub fn _strspn_ascii_64_avx(buf: &[u8], arbm: __m256i) -> usize {
     }
 }
 
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+#[cfg(target_feature = "sse4.2")]
 #[inline]
 pub fn _strspn_ascii_32_sse(buf: &[u8], arbm: __m128i) -> usize {
     debug_assert!(buf.len() >= 32);
@@ -109,7 +109,7 @@ pub fn _strspn_ascii_32_sse(buf: &[u8], arbm: __m128i) -> usize {
     }
 }
 
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+#[cfg(target_feature = "sse4.2")]
 #[inline]
 pub fn _strspn_ascii_64_sse(buf: &[u8], arbm: __m128i) -> usize {
     debug_assert!(buf.len() >= 64);
@@ -162,8 +162,8 @@ pub fn _strspn_ascii_64_sse(buf: &[u8], arbm: __m128i) -> usize {
 mod tests {
     use super::*;
 
+    #[cfg(target_feature = "avx2")]
     #[test]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
     fn test_strspn_ascii_32_avx() {
         // Only allow 'A' (0x41)
         let allow = unsafe { _mm256_setr_epi8(
@@ -179,8 +179,8 @@ mod tests {
         assert_eq!(_strspn_ascii_32_avx(&buf, allow), 31);
     }
 
+    #[cfg(target_feature = "avx2")]
     #[test]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
     fn test_strspn_ascii_64_avx() {
         // Only allow 'B' (0x42)
         let allow = unsafe { _mm256_setr_epi8(
@@ -196,8 +196,8 @@ mod tests {
         assert_eq!(_strspn_ascii_64_avx(&buf, allow), 63);
     }
 
+    #[cfg(target_feature = "sse4.2")]
     #[test]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
     fn test_strspn_ascii_32_sse() {
         // Only allow 'A' (0x41)
         let allow = unsafe { _mm_setr_epi8(
@@ -211,8 +211,8 @@ mod tests {
         assert_eq!(_strspn_ascii_32_sse(&buf, allow), 31);
     }
 
+    #[cfg(target_feature = "sse4.2")]
     #[test]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
     fn test_strspn_ascii_64_sse() {
         // Only allow 'B' (0x42)
         let allow = unsafe { _mm_setr_epi8(

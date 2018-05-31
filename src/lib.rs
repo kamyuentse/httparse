@@ -1,6 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
-// #![cfg_attr(test, deny(warnings))]
-#![cfg_attr(feature = "nightly", feature(cfg_target_feature, stdsimd))]
+#![cfg_attr(feature = "nightly", feature(stdsimd))]
 #![deny(missing_docs)]
 //! # httparse
 //!
@@ -514,65 +513,6 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 
 #[inline]
 fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
-//     #[cfg(feature = "nightly")]
-//     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
-//     {
-//         #[allow(non_snake_case, overflowing_literals)]
-//         let TOKEN = unsafe { _mm256_setr_epi8(
-//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
-//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
-//         ) };
-//
-//         while bytes.as_ref().len() >= 64 {
-//             let nspn = _strspn_ascii_64_avx(bytes.as_ref(), TOKEN);
-//             bytes.advance(nspn);
-//
-//             if nspn != 64 {
-//                 break;
-//             }
-//         }
-//
-//         while bytes.as_ref().len() >= 32 {
-//             let nspn = _strspn_ascii_32_avx(bytes.as_ref(), TOKEN);
-//             bytes.advance(nspn);
-//
-//             if nspn != 32 {
-//                 break;
-//             }
-//         }
-//     }
-//
-//     #[cfg(feature = "nightly")]
-//     #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
-//     {
-//         #[allow(non_snake_case, overflowing_literals)]
-//         let TOKEN = unsafe { _mm_setr_epi8(
-//             0xe8, 0xfc, 0xf8, 0xfc, 0xfc, 0xfc, 0xfc, 0xfc,
-//             0xf8, 0xf8, 0xf4, 0x54, 0xd0, 0x54, 0xf4, 0x70,
-//         ) };
-//
-//         while bytes.as_ref().len() >= 64 {
-//             let nspn = _strspn_ascii_64_sse(bytes.as_ref(), TOKEN);
-//             bytes.advance(nspn);
-//
-//             if nspn != 64 {
-//                 break;
-//             }
-//         }
-//
-//         while bytes.as_ref().len() >= 32 {
-//             let nspn = _strspn_ascii_32_sse(bytes.as_ref(), TOKEN);
-//             bytes.advance(nspn);
-//
-//             if nspn != 32 {
-//                 break;
-//             }
-//         }
-//     }
-
-    // fallback implementation
     loop {
         let b = next!(bytes);
         if b == b' ' {
@@ -586,11 +526,9 @@ fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
     }
 }
 
-
 #[inline]
 fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
-    #[cfg(feature = "nightly")]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+    #[cfg(all(feature = "nightly", target_feature = "avx2"))]
     {
         #[allow(non_snake_case, overflowing_literals)]
         let URI = unsafe { _mm256_setr_epi8(
@@ -619,8 +557,7 @@ fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
         }
     }
 
-    #[cfg(feature = "nightly")]
-    #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+    #[cfg(all(feature = "nightly", target_feature = "sse4.2"))]
     {
         #[allow(non_snake_case, overflowing_literals)]
         let URI = unsafe { _mm_setr_epi8(
@@ -647,6 +584,32 @@ fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
         }
     }
 
+//    let mut b = next!(bytes);
+//
+//    macro_rules! check {
+//        ($bytes:ident, $i:ident) => ({
+//            b = $bytes.$i(); // will cause pos + 1
+//            if !is_uri_char(b) {
+//                break;
+//            }
+//        });
+//        ($bytes:ident) => ({
+//            check!($bytes, _0);
+//            check!($bytes, _1);
+//            check!($bytes, _2);
+//            check!($bytes, _3);
+//            check!($bytes, _4);
+//            check!($bytes, _5);
+//            check!($bytes, _6);
+//            check!($bytes, _7);
+//        })
+//    }
+//    while let Some(mut bytes8) = bytes.next_8() {
+//        check!(bytes8);
+//    }
+//
+//    println!("{}", unsafe { str::from_utf8_unchecked(bytes.as_ref()) });
+
     loop {
         let b = next!(bytes);
         if b == b' ' {
@@ -655,6 +618,7 @@ fn parse_uri<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 str::from_utf8_unchecked(bytes.slice_skip(1))
             }));
         } else if !is_uri_char(b) {
+            println!("parse_uri error");
             return Err(Error::Token);
         }
     }
@@ -696,21 +660,15 @@ pub fn parse_headers<'b: 'h, 'h>(src: &'b [u8], mut dst: &'h mut [Header<'b>])
     Ok(Status::Complete((pos, dst)))
 }
 
-#[cfg(feature = "nightly")]
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+#[cfg(all(feature = "nightly", target_feature = "avx2"))]
 #[inline]
 fn match_header_value_char_16_sse(buf: &[u8]) -> usize {
     debug_assert!(buf.len() >= 16);
 
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
-
     let ptr = buf.as_ptr();
 
     #[allow(non_snake_case)]
-        unsafe {
+    unsafe {
         // %x09 %x20-%x7e %x80-%xff
         let TAB: __m128i = _mm_set1_epi8(0x09);
         let DEL: __m128i = _mm_set1_epi8(0x7f);
@@ -728,16 +686,10 @@ fn match_header_value_char_16_sse(buf: &[u8]) -> usize {
     }
 }
 
-#[cfg(feature = "nightly")]
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+#[cfg(all(feature = "nightly", target_feature = "avx2"))]
 #[inline]
 fn match_header_value_char_32_avx(buf: &[u8]) -> usize {
     debug_assert!(buf.len() >= 32);
-
-    #[cfg(target_arch = "x86")]
-    use core::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use core::arch::x86_64::*;
 
     let ptr = buf.as_ptr();
 
@@ -807,7 +759,6 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
             let mut b;
 
             'value: loop {
-
                 // eat white space between colon and value
                 'whitespace: loop {
                     b = next!(bytes);
@@ -824,9 +775,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                 }
 
                 // parse value till EOL
-
-                #[cfg(feature = "nightly")]
-                #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "avx2"))]
+                #[cfg(all(feature = "nightly", target_feature = "avx2"))]
                 {
                     'batch32: while bytes.as_ref().len() >= 32 {
                         let advance = match_header_value_char_32_avx(bytes.as_ref());
@@ -837,8 +786,7 @@ fn parse_headers_iter<'a, 'b>(headers: &mut &mut [Header<'a>], bytes: &'b mut By
                        }
                     }
                 }
-                #[cfg(feature = "nightly")]
-                #[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), target_feature = "sse4.2"))]
+                #[cfg(all(feature = "nightly", target_feature = "sse4.2"))]
                 {
                     'batch16: while bytes.as_ref().len() >= 16 {
                         let advance = match_header_value_char_16_sse(bytes.as_ref());
