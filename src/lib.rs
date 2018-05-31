@@ -660,7 +660,7 @@ pub fn parse_headers<'b: 'h, 'h>(src: &'b [u8], mut dst: &'h mut [Header<'b>])
     Ok(Status::Complete((pos, dst)))
 }
 
-#[cfg(all(feature = "nightly", target_feature = "avx2"))]
+#[cfg(all(feature = "nightly", target_feature = "sse4.2"))]
 #[inline]
 fn match_header_value_char_16_sse(buf: &[u8]) -> usize {
     debug_assert!(buf.len() >= 16);

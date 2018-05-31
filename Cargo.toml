@@ -1,5 +1,4 @@
 [package]
-
 name = "httparse"
 version = "1.2.4"
 authors = ["Sean McArthur <sean@seanmonstar.com>"]
@@ -15,11 +14,12 @@ default = ["std"]
 std = []
 nightly = []
 
-[dev-dependencies]
-pico-sys = "0.0"
+[dev-dependencies.pico-sys]
+branch = "master"
+git = "https://github.com/kamyuentse/rust-pico-sys.git"
 
 [profile.bench]
 lto = true
 debug = true
-opt-level = 3
+opt-level = 2
 codegen-units = 1
